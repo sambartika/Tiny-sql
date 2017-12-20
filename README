@@ -1,14 +1,65 @@
-Please make sure to include all the .h files in your own program.
-Before compiling, review the parameter settings in Config.h.
-
-The file TestStorageManager.cpp is a test program. 
-The program writes output to the file test_log.
-The program also generates error message from the parts of error testing.
-
-If you find a bug when using the library, please report to the TA immediately.
-
 ========================================================================================
+How to run the Program
 
+flex typ.l
+bison -dy typ.y
+g++ -std=c++11 lex.yy.c y.tab.c *.cpp -o a.exe
+./a.exe
+========================================================================================
+Parser:
+We have created the parse tree using LEX and YACC. LEX will break the input into tokens and the grammar rules are defined inside YACC. Whatever inputs come, LEX wii break it and YACC 
+check if the query is correct. From YACC the parse tree will be generated which will be used in all over the project.
+
+For each non-terminal in the TinySQL grammar, we created a class, with children as pointers to other classes. 
+As example, consider the following grammar line for statement:
+
+statement ::= create-table-statement | drop-table-statement | select-statement | delete-statement | insert-statement
+
+Our parser creates a class statement, with children as pointers to create-table-statement class, drop-table-statement class, select-statement class, and so on.
+
+If the input line is a create table statement, then all the pointers in the statement object will be NULL, except the create-table-statement pointer. 
+
+The parser returns a pointer to an object of class statement. Let’s call this pointer as root. We can traverse the entire parse tree structure via this root. pointer 
+
+Once the root of parse tree is generated, the program is routed to db_manager.cpp. 
+
+DB MANAGER
+
+We have defined a db_manager class which has the MainMemory, Disk, SchemaManager objects from the Storage Memory library as its attributes.
+Before starting to parse we create an object of db_manager, and initialize it with the storage manager’s Disk, and MainMemory objects. 
+ 
+For each input line that the parser reads, it calls the process_statement function from db_manager, by providing it a root pointer. The process_statement functions evaluates which type of statement the root is of, by evaluating which of its children pointer is NOT NULL: 
+INSERT, CREATE, SELECT, DELETE, DROP,
+
+BLOCK MANAGER
+
+In the function process_select_in_memory, the first step we do is to prepare the incoming tables for a join. We have created a function called prepare_join which takes in a vector of table names, and returns just one Relation pointer, which is the joined version of all the tables. 
+Now there could only be just one table. In that case it will return the relation pointer of the singleton table, without any join. But if there are multiple tables, then it does the following: 
+
+We do the following optimization, we store the relation size of each relation, and then join them in the order of their sizes, so that the intermediate tables are small, and thus the disk I/O for those tables will be less. To achieve this, we calculate the smallest two relations from the list, and send these two tables to function join, which returns a relation pointer. 
+
+Now while joining two relations we have implemented both one-pass (where one of the join tables fits in memory), the nested loop algorithms (both the join tables are larger than main memory), and sorted two pass (in case of a natural join).
+
+Now joining two tables can result in very large intermediate tables, which needs to be written back to disk, causing more disk I/Os. One optimization that we did was to push the selections down on to the individual join tables if the condition is based solely on the attributes of that column. To achieve this we have written a function which takes the search condition as a postfixExpression, and then creates an expression tree out of it. To this function we pass the attribute list that the current table has, and we try to see if there is a clause in the search condition that can be applied to this table. 
+
+We do that in the following way: we check if the expression begins by an OR, if yes then a single table can’t affect its outcome, and thus we return false, and that tuple has to go for join. 
+But if the clause is rooted with an AND, then we check if the column names used in the clause are part of the table attribute names, if yes, then we apply that clause to the tuple, and only proceed the tuple for join if it satisfies the condition.
+Once we have checked for the clauses on the individual tables before joining, we join them and then again check if any clause is applicable to it. If yes, we apply that clause, and only write it to the intermediate table if it passes. We write back the intermediate tables back onto disk. And return the pointer of that relation. 
+
+Once we have done the join of all relations, as described above, we delete any intermediate relations created for this join, and only keep the final relation, which is the result of the join, with some selections pushed down on it.
+
+Now we have a relation which is a culmination of the join of the tables. 
+Next we implement select in two scenarios, one pass, and two pass; SInce select is just a single block function, we created these two functions because there can be operations in select, like duplicate (DISTINCT), sort (ORDER BY), which can be implemented in either one-pass or two pass based on the relation size compared to the main memory size. We have implemented the one-pass, and two-pass methods of DISTINCT, and ORDER BY. To achieve this we have implemented two pass sort method described in class, and also used the two pass sorting to eliminate duplicates.
+
+In two pass sort, we have used Two-phase Multi-way MergeSort where in the first phase we have first brought into memory maximum number of blocks and sorted them. Then we have added them back to a temporary relation. Then in the second phase we have brought one block from each sorted partition and found the minimum among them and written into a block. When a block is full we have written that to a new relation in disk. When one block of any partition is exhausted, we brought another block from that partition. Like that, we have sorted the relation. Next operations are now performed on new relation.
+
+For two pass distinct, we have first sorted the relation according to the first select list attribute. Then we brought each block from disk. Going backward, if the previous tuple sorting attribute value is different, we have written that. Otherwise while sorting attribute value is same we have checked. If that tuple not found, then written that. Otherwise discarded that tuple.
+
+Select proceeds further by sending each tuple via the search condition check, and it gets printed only if it passes the WHERE clause. 
+
+Once the tuple passes the check, it goes to project function which will select the attributes that needs to be actually printed based on the select list identified earlier.
+
+STORAGE MANAGER LIBRARY
 The StorageManager library simulates disk and memory storage in "the memory" of your computer. You will build a single-user Tiny-SQL interpreter upon the StorageManager, storing data in the simulated disk, and get the data from the simulated disk to the simulated memory for further processing. Because the storage is simulated in the memory, everytime your simulated database will start running with empty storage. When the user inputs SQL statements, such as doing insertion, deletion, updating, and querying, the interpreter should access simulated disk and simulated memory. When the database system terminates, the data in the simulated storage are lost.
 
 The data structure of StorageManager is summerized below in a bottom-up fasion:
@@ -37,20 +88,3 @@ The data structure of StorageManager is summerized below in a bottom-up fasion:
   Please NOTE that you do not need to access the Disk directly. Accessing to a Relation is sufficient for any operation. The Relation class will call the Disk automatically.
 
 - Class "MainMemory": The simulated memory holds NUM_OF_BLOCKS_IN_MEMORY blocks numbered by 0,1,2,... When testing the correctness of the interpreter, NUM_OF_BLOCKS_IN_MEMORY will be set to 10. When measuring the performance of the interpreter using one thousand 5-8 field tuples, NUM_OF_BLOCKS_IN_MEMORY will be set to 300. You can get total number of blocks in the memory by calling MainMemory::getMemorySize(). Before accessing data of a relation, you have to copy the disk blocks of a relation to the simulated main memory. Then, access the tuples in the simulated main memory. Or in the other direction, you will copy the memory blocks to disk blocks of a relation when writing data to the relation. Because the size of memory is limited, you have to do the database operations wisely. We assume there is no latency in accessing memory.
-
-========================================================================================
-
-Below is a short description of how to use the library.
-
-1. At the beginning of your program, you have to create a MainMemory, a Disk, and a SchemaManager. The three objects will be used throughout the whole program.
-
-2. You have to handle the disk block addresses and memory block addresses by yourselves. The library does not decide for you where to store the data. You should always start with creating a Schema object, creating a Relation from the SchemaManager by specifying a name, say "Student", and the Schema, and getting a pointer to the created Relation. Then, create a Tuple of the Relation through the Relation class. Get a pointer to an empty memory Block, say block 7, from the MainMemory. Store the created Tuple by "appending" it to empty memory Block 7. Finally copy the memory block to the disk block of the created Relation, say, copying memory block 7 to the disk block 0 of the Relation "Student". 
-
-3. When you need to browse the data of a Relation, copy disk blocks of the Relation to memory blocks, and access the tuples from the Blocks of the MainMemory. There are two ways  to access the tuples. You can get a pointer to a specific Block of the MainMemory, and access the Tuples inside the Block. Otherwise, you can also access directly the Tuples stored in consecutive memory blocks by calling the functions of the MainMemory. The Tuples will be returned in a vector. It is convenient to sort or build a heap on the vector of Tuples.
-
-4. The data of each relation are assumed to be stored in a dense/clustered/contiguous way in the disk. Each relation has data stored in disk block 0, 1, 2,...,and there is no size limit. A way to maintain dense disk blocks is: every time before you "insert a tuple", you should copy the last disk block of the relation, say block R, to the memory block M. Append the inserting tuple to the memory block M if the block M is not full. Then, copy the memory block M back to the disk block R. However, if the memory block M is full, which says the last disk block R is full, you have to insert the tuple to the next disk block R+1. Thus instead, get an empty memory block M', insert the tuple to beginning of the memory block M', and copy that memory block M' to the disk block R+1.
-
-5. When deleting a Tuple of Block R from the relation, the simplest way is to copy the Block R to memory, "null" the Tuple, and rewrite the modified memory block to the same place, Block R, in the relation. In this way, there might be holes in the Block and in the Relation, so be sure to consider the holes when doing every SQL operation. You certainly can have other way of managing tuple deletion. Bear in mind that reading and writing disk/relation blocks take time.
-
-You are recommended to read the usage of each class in .h files. Then, trace the test program TestStorageManager.cpp, which demonstrates how to use the library. You don't need to read the implementation of the library in StorageManager.cpp. If you have questions about how a function is implemented, please contact TA.
-
